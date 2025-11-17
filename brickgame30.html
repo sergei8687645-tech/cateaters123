@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30-Level Brick Breaker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom CSS for a retro arcade feel */
+        body {
+            background-color: #1a1a2e; /* Dark space theme */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Orbitron', sans-serif;
+            color: #e94560;
+            user-select: none;
+        }
+
+        #game-container {
+            width: 90%;
+            max-width: 600px;
+            box-shadow: 0 0 30px rgba(233, 69, 96, 0.5);
+            border-radius: 1rem;
+            overflow: hidden;
+            border: 5px solid #e94560;
+            background-color: #0f3460;
+            padding: 10px;
+        }
+
+        canvas {
+            background: #16213e; /* Darker blue inside */
+            display: block;
+            border-radius: 0.5rem;
+            width: 100%;
+            height: auto;
+            /* Added pointer for clarity on clickable area */
+            cursor: pointer;
+        }
+
+        #info-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            font-size: 1.1rem;
+        }
+
+        .info-item {
+            background-color: #2e4a86;
+            padding: 8px 15px;
+            border-radius: 0.5rem;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            background-color: #e94560;
+            color: #1a1a2e;
+            border-radius: 1rem;
+            box-shadow: 0 0 20px #e94560;
+            text-align: center;
+            z-index: 1000;
+            display: none;
+            cursor: pointer;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .heart {
+            color: #ff0077;
+            margin-left: 5px;
+            font-size: 1.2rem;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="info-bar">
+            <div class="info-item">Level: <span id="level-display">1</span> / 30</div>
+            <div class="info-item">Score: <span id="score-display">0</span></div>
+            <div class="info-item">Lives: <span id="lives-display"></span></div>
+        </div>
+        <canvas id="brickBreakerCanvas"></canvas>
+    </div>
+
+    <div id="message-box" class="message-box">
+        <!-- Messages will be displayed here -->
+    </div>
+
+    <script>
+        // Wrap the entire script in an IIFE to isolate variables and prevent "already declared" errors
+        (function() {
+            // --- Setup and Initialization ---
+            const canvas = document.getElementById('brickBreakerCanvas');
+            const ctx = canvas.getContext('2d');
+            const messageBox = document.getElementById('message-box');
+
+            // Set initial canvas size (will be resized dynamically based on CSS)
+            canvas.width = 600;
+            canvas.height = 400;
+
+            // Game State Variables (Declared once with 'let')
+            let currentLevel = 1;
+            const maxLevels = 30;
+            let lives = 3;
+            let score = 0;
+            let gameActive = false; // Controls the game loop
+            let pendingStart = true; // Waiting for first start click
+            let ballAttachedToPaddle = true; // Controls if the ball moves with the paddle
+
+            // Ball Properties
+            let x;
+            let y;
+            let dx;
+            let dy;
+            const ballRadius = 6;
+            const baseSpeed = 2.5; // Initial speed
+            let speedFactor = 1.0;
+
+            // Paddle Properties
+            const paddleHeight = 10;
+            const paddleWidth = 75;
+            let paddleX;
+            let rightPressed = false;
+            let leftPressed = false;
+
+            // Brick Properties
+            const brickRowCount = 5;
+            const brickColumnCount = 8;
+            const brickWidth = 65;
+            const brickHeight = 15;
+            const brickPadding = 10;
+            const brickOffsetTop = 30;
+            const brickOffsetLeft = 30;
+            let bricks = [];
+            let bricksRemaining = 0;
+
+            // LEVEL CONFIGURATIONS (Row-major: [Row][Col], 0=empty, 1=1-hit, 2=2-hit)
+            const LEVEL_PATTERNS = [
+                // Level 1: Solid Top Row
+                [
+                    [1, 1, 1, 1, 1, 1, 1, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                // Level 2: Frame Shape (Tough outer layer)
+                [
+                    [2, 2, 2, 2, 2, 2, 2, 2],
+                    [2, 0, 0, 0, 0, 0, 0, 2],
+                    [2, 0, 0, 0, 0, 0, 0, 2],
+                    [2, 2, 2, 2, 2, 2, 2, 2],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                // Level 3: Pyramid / Triangle Shape
+                [
+                    [0, 0, 0, 1, 1, 0, 0, 0],
+                    [0, 0, 1, 1, 1, 1, 0, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 0],
+                    [1, 1, 1, 1, 1, 1, 1, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                // Level 4: Checkerboard Pattern
+                [
+                    [1, 2, 1, 2, 1, 2, 1, 2],
+                    [2, 1, 2, 1, 2, 1, 2, 1],
+                    [1, 2, 1, 2, 1, 2, 1, 2],
+                    [2, 1, 2, 1, 2, 1, 2, 1],
+                    [1, 2, 1, 2, 1, 2, 1, 2],
+                ],
+                // Level 5: Diagonal Stripes
+                [
+                    [2, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 2, 0, 0, 0, 0, 1, 0],
+                    [0, 0, 2, 0, 0, 1, 0, 0],
+                    [0, 0, 0, 2, 1, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0],
+                ]
+            ];
+            
+            // --- Utility Functions ---
+
+            /**
+             * Resets the ball's initial position and paddle position for a new launch.
+             * Also kills velocity and attaches the ball to the paddle.
+             */
+            function resetBallAndPaddle() {
+                // Ball position is fixed relative to paddle
+                y = canvas.height - 30;
+                paddleX = (canvas.width - paddleWidth) / 2;
+                x = paddleX + paddleWidth / 2; 
+
+                // Kill velocity
+                dx = 0; 
+                dy = 0; 
+                
+                ballAttachedToPaddle = true;
+            }
+
+            /**
+             * Sets the ball's velocity (dx, dy) based on the current level's speed factor.
+             */
+            function setInitialVelocity() {
+                // Speed increases by 10% per level, starting from level 1
+                speedFactor = baseSpeed + (currentLevel - 1) * (baseSpeed * 0.1);
+                
+                // Random direction at a consistent speed
+                // Use a slight angle for initial launch
+                dx = (Math.random() < 0.5 ? 1 : -1) * speedFactor * 0.7; // x-component (slower at start)
+                dy = -Math.sqrt(speedFactor * speedFactor - dx * dx); // y-component (calculated to maintain constant total speed)
+            }
+
+
+            /**
+             * Loads a structured brick layout for the current level.
+             */
+            function loadLevelBricks(level) {
+                bricks = [];
+                bricksRemaining = 0;
+                
+                // Cycle through defined patterns
+                const patternIndex = (level - 1) % LEVEL_PATTERNS.length;
+                const pattern = LEVEL_PATTERNS[patternIndex];
+
+                // Initialize the column array first (as the rest of the code expects bricks[Col][Row])
+                for (let c = 0; c < brickColumnCount; c++) {
+                    bricks[c] = [];
+                }
+
+                // Load data from pattern[row][column] into bricks[column][row]
+                for (let r = 0; r < brickRowCount; r++) { 
+                    for (let c = 0; c < brickColumnCount; c++) { 
+                        // Read status from the pattern (Pattern is [Row][Col])
+                        const status = pattern[r] ? pattern[r][c] || 0 : 0; 
+                        
+                        if (status > 0) {
+                            // Store in the game state as [Col][Row]
+                            bricks[c][r] = { x: 0, y: 0, status: status };
+                            bricksRemaining++;
+                        } else {
+                            bricks[c][r] = { x: 0, y: 0, status: 0 };
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Initializes or resets the state for the current level (bricks, ball position).
+             */
+            function initLevel() {
+                loadLevelBricks(currentLevel);
+                resetBallAndPaddle();
+                // Removed: lives = 3; -> Lives now persist across successful levels.
+                gameActive = false;
+                hideMessage();
+                draw(); // Draw the new level layout immediately
+            }
+
+            /**
+             * Clears the message box.
+             */
+            function hideMessage() {
+                messageBox.style.display = 'none';
+            }
+
+            /**
+             * Shows a message box and pauses the game loop.
+             */
+            function showMessage(text, isRestart = false) {
+                gameActive = false;
+                // Click on the canvas will now start the loop or launch the ball
+                messageBox.innerHTML = text + (isRestart ? '<br><br>Click to Restart Level' : '<br><br>Click to Continue');
+                messageBox.onclick = isRestart ? restartLevel : nextLevel;
+                messageBox.style.display = 'block';
+            }
+
+            // --- Drawing Functions ---
+
+            /**
+             * Draws the current number of lives using heart icons.
+             */
+            function drawLives() {
+                const livesEl = document.getElementById('lives-display');
+                livesEl.innerHTML = '';
+                for (let i = 0; i < lives; i++) {
+                    const heart = document.createElement('span');
+                    heart.className = 'heart';
+                    heart.innerHTML = '&#10084;'; // Heart symbol
+                    livesEl.appendChild(heart);
+                }
+            }
+
+            /**
+             * Updates the score, level, and lives display in the info bar.
+             */
+            function updateDisplay() {
+                document.getElementById('level-display').textContent = currentLevel;
+                document.getElementById('score-display').textContent = score;
+                drawLives();
+            }
+
+            /**
+             * Draws the ball at its current coordinates.
+             */
+            function drawBall() {
+                ctx.beginPath();
+                ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+                ctx.fillStyle = "#ffc700"; // Neon Yellow
+                ctx.shadowColor = '#ffc700';
+                ctx.shadowBlur = 10;
+                ctx.fill();
+                ctx.closePath();
+                ctx.shadowBlur = 0; // Reset shadow
+            }
+
+            /**
+             * Draws the paddle at its current coordinates.
+             */
+            function drawPaddle() {
+                ctx.beginPath();
+                ctx.rect(paddleX, canvas.height - paddleHeight, paddleWidth, paddleHeight);
+                ctx.fillStyle = "#00f6ff"; // Neon Cyan
+                ctx.shadowColor = '#00f6ff';
+                ctx.shadowBlur = 15;
+                ctx.fill();
+                ctx.closePath();
+                ctx.shadowBlur = 0;
+            }
+
+            /**
+             * Draws the bricks that are still active (status > 0).
+             */
+            function drawBricks() {
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const brick = bricks[c][r];
+                        if (brick.status > 0) {
+                            // Calculate brick position
+                            const brickX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                            const brickY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                            brick.x = brickX;
+                            brick.y = brickY;
+
+                            ctx.beginPath();
+                            ctx.rect(brickX, brickY, brickWidth, brickHeight);
+
+                            // Color based on status (health)
+                            let color;
+                            if (brick.status === 2) {
+                                color = "#ff6a00"; // Orange for 2-hit bricks
+                                ctx.shadowColor = '#ff6a00';
+                            } else {
+                                color = "#e94560"; // Red for 1-hit bricks
+                                ctx.shadowColor = '#e94560';
+                            }
+
+                            ctx.fillStyle = color;
+                            ctx.shadowBlur = 10;
+                            ctx.fill();
+                            ctx.closePath();
+                            ctx.shadowBlur = 0; // Reset shadow
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Main drawing function, clears the canvas and redraws all elements.
+             */
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawBricks();
+                
+                // If attached, update ball position relative to the paddle
+                if (ballAttachedToPaddle) {
+                    x = paddleX + paddleWidth / 2;
+                }
+                
+                drawBall();
+                drawPaddle();
+                updateDisplay();
+
+                // If pending start, show initial message
+                if (pendingStart) {
+                    if(messageBox.style.display !== 'block') {
+                        showMessage("Click to Start Game!", false);
+                        messageBox.onclick = startGame;
+                    }
+                }
+            }
+
+            // --- Collision and Game Logic ---
+
+            /**
+             * Handles wall and paddle collision.
+             */
+            function wallAndPaddleCollision() {
+                // Wall collision (left/right)
+                if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) {
+                    dx = -dx;
+                }
+
+                // Wall collision (top)
+                if (y + dy < ballRadius) {
+                    dy = -dy;
+                } else if (y + dy > canvas.height - ballRadius - paddleHeight) {
+                    // Check if ball hits the paddle area
+                    if (x > paddleX && x < paddleX + paddleWidth) {
+                        dy = -dy;
+                        // Introduce angle variation based on where the ball hits the paddle
+                        const relativeIntersectX = (x - (paddleX + paddleWidth / 2));
+                        const normalizedRelativeIntersectX = (relativeIntersectX / (paddleWidth / 2));
+                        // Max angle change is 0.5 * speedFactor
+                        dx = normalizedRelativeIntersectX * speedFactor;
+                    }
+                } else if (y + dy > canvas.height - ballRadius) {
+                    // Ball hit the bottom, player loses a life
+                    loseLife();
+                    return true; // Indicate a life was lost
+                }
+                return false;
+            }
+
+            /**
+             * Handles brick collision detection.
+             */
+            function brickCollisionDetection() {
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        // Check only active bricks
+                        if (b.status > 0) {
+                            if (x > b.x && x < b.x + brickWidth && y > b.y && y < b.y + brickHeight) {
+                                // Collision detected! Reverse the vertical direction.
+                                dy = -dy;
+
+                                // Decrease brick status (health)
+                                b.status--;
+
+                                if (b.status === 0) {
+                                    // Brick fully destroyed
+                                    bricksRemaining--;
+                                    score += 10;
+
+                                    // Check if all bricks are broken
+                                    if (bricksRemaining === 0) {
+                                        winLevel();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Logic when the player loses a life.
+             */
+            function loseLife() {
+                lives--; // Life count is decremented
+
+                if (lives === 0) {
+                    // Player lost all lives for this level
+                    showMessage(`Level ${currentLevel} Failed!`, true); // True indicates a restart operation
+                } else {
+                    // CRITICAL FIX: Reset ball, attach to paddle, pause game loop, and show message
+                    gameActive = false; 
+                    resetBallAndPaddle(); // Reset position, kill velocity, attach ball
+                    
+                    // Draw the ball in the frozen, reset position *before* showing the message
+                    draw(); // This updates the lives display immediately
+                    showMessage("Life Lost. Line up shot and click/press SPACE to launch.", false);
+                    // The click handler below only removes the message, doesn't launch
+                    messageBox.onclick = startReadyLoop; 
+                }
+            }
+
+            /**
+             * Restarts the current level (used when 3 lives are lost).
+             */
+            function restartLevel() {
+                lives = 3; // Lives must be reset to 3 upon full game restart/level failure
+                initLevel();
+                startReadyLoop();
+            }
+
+            /**
+             * Logic when the player wins the current level.
+             */
+            function winLevel() {
+                gameActive = false; // Pause the game temporarily
+
+                if (currentLevel < maxLevels) {
+                    showMessage(`Level ${currentLevel} Complete! Prepare for Level ${currentLevel + 1}. Click to continue.`, false);
+                    currentLevel++;
+                    // nextLevel handles the actual state transition on click
+                } else {
+                    // Game victory!
+                    messageBox.innerHTML = `CONGRATULATIONS! YOU COMPLETED ALL ${maxLevels} LEVELS! <br>Final Score: ${score}<br><br>Click to play again!`;
+                    messageBox.onclick = () => {
+                        // Reset game for a new playthrough
+                        currentLevel = 1;
+                        score = 0;
+                        lives = 3; // Explicitly reset for a new game
+                        pendingStart = true;
+                        initLevel();
+                        draw(); // Show initial start screen
+                        hideMessage();
+                    };
+                    messageBox.style.display = 'block';
+                }
+            }
+
+            /**
+             * Moves to the next level. Called after a 'Level Complete' message click.
+             */
+            function nextLevel() {
+                // Lives are NOT reset here, allowing them to persist from the previous level.
+                initLevel(); // Sets up the next level (resets ball/paddle/attaches ball)
+                startReadyLoop(); // Starts the loop, waiting for launch
+            }
+
+            /**
+             * Launches the ball from the paddle.
+             */
+            function launchBall() {
+                if (gameActive && ballAttachedToPaddle) {
+                    setInitialVelocity(); // Set velocity
+                    ballAttachedToPaddle = false; // Detach ball
+                }
+            }
+
+            // --- Event Handlers ---
+
+            function keyDownHandler(e) {
+                if (e.key === "Right" || e.key === "ArrowRight") {
+                    rightPressed = true;
+                } else if (e.key === "Left" || e.key === "ArrowLeft") {
+                    leftPressed = true;
+                } else if (e.key === " ") {
+                    e.preventDefault(); // Prevent spacebar scrolling
+
+                    if (ballAttachedToPaddle) {
+                        // Launch the ball if attached
+                        launchBall();
+                    } else if (gameActive) {
+                        // If ball is in play, use spacebar as a "suicide" to reset the ball position
+                        // and lose one life, ready for a new launch.
+                        loseLife();
+                    }
+                }
+            }
+
+            function keyUpHandler(e) {
+                if (e.key === "Right" || e.key === "ArrowRight") {
+                    rightPressed = false;
+                } else if (e.key === "Left" || e.key === "ArrowLeft") {
+                    leftPressed = false;
+                }
+            }
+            
+            // Launch ball on canvas click/tap if game is active and ball is attached
+            function canvasClickHandler(e) {
+                if (gameActive) {
+                    launchBall();
+                }
+            }
+
+            function mouseMoveHandler(e) {
+                const relativeX = e.clientX - canvas.offsetLeft;
+                // Prevent the paddle from moving outside the canvas boundaries
+                if (relativeX > paddleWidth / 2 && relativeX < canvas.width - paddleWidth / 2) {
+                    paddleX = relativeX - paddleWidth / 2;
+                }
+            }
+
+            // Add event listeners
+            document.addEventListener("keydown", keyDownHandler, false);
+            document.addEventListener("keyup", keyUpHandler, false);
+            canvas.addEventListener("mousemove", mouseMoveHandler, false); // Use canvas for movement tracking
+            canvas.addEventListener("click", canvasClickHandler, false);
+            
+            // Touch events for mobile support
+            canvas.addEventListener('touchmove', (e) => {
+                if (e.touches.length > 0) {
+                    const touchX = e.touches[0].clientX - canvas.offsetLeft;
+                    if (touchX > paddleWidth / 2 && touchX < canvas.width - paddleWidth / 2) {
+                        paddleX = touchX - paddleWidth / 2;
+                    }
+                }
+                e.preventDefault(); // Prevent scrolling while playing
+            }, false);
+            canvas.addEventListener('touchend', canvasClickHandler, false);
+
+
+            // --- Main Game Loop ---
+
+            function updatePaddleMovement() {
+                const paddleSpeed = 7;
+                if (rightPressed && paddleX < canvas.width - paddleWidth) {
+                    paddleX += paddleSpeed;
+                } else if (leftPressed && paddleX > 0) {
+                    paddleX -= paddleSpeed;
+                }
+            }
+
+            function updateGame() {
+                if (!gameActive) return;
+
+                // 1. Move paddle regardless of ball state
+                updatePaddleMovement();
+
+                // 2. Only check collisions and move ball if it's detached
+                if (!ballAttachedToPaddle) {
+                    brickCollisionDetection();
+                    const lifeLost = wallAndPaddleCollision();
+                    if (lifeLost) {
+                        // If a life was lost, we immediately return, preventing ball movement below.
+                        // loseLife() already handled setting gameActive=false
+                        return;
+                    }
+
+                    // Move ball
+                    x += dx;
+                    y += dy;
+                }
+
+                // 3. Redraw everything
+                draw();
+
+                // 4. Request next frame
+                requestAnimationFrame(updateGame);
+            }
+
+            function startGame() {
+                pendingStart = false;
+                hideMessage();
+                startReadyLoop();
+            }
+
+            /**
+             * Starts the animation loop, making the paddle and attached ball moveable,
+             * but doesn't launch the ball yet.
+             */
+            function startReadyLoop() {
+                hideMessage(); 
+                if (gameActive) return; // Already running
+                
+                gameActive = true;
+                requestAnimationFrame(updateGame);
+            }
+
+            // Initial setup and draw
+            function initGame() {
+                // Ensure the canvas size adjusts to the container on load
+                const container = document.getElementById('game-container');
+                canvas.width = container.offsetWidth - 20; // Accounting for 10px padding on each side
+                canvas.height = canvas.width * 0.6; // Maintain aspect ratio
+
+                // Initialize all dynamic position/state variables for the first time
+                resetBallAndPaddle(); // Reset position and attach ball
+                
+                loadLevelBricks(currentLevel);
+                draw(); // Draw the initial waiting screen
+            }
+
+            // Start the initialization process
+            window.onload = initGame;
+            window.onresize = initGame; // Re-initialize on window resize for responsiveness
+
+        })(); // End of IIFE
+    </script>
+</body>
+</html>
